@@ -74,6 +74,10 @@ export class Controls {
     return this.pressedKeys.has('ShiftLeft') || this.pressedKeys.has('ShiftRight');
   }
 
+  isSprintPressed(): boolean {
+    return this.pressedKeys.has('ControlLeft') || this.pressedKeys.has('ControlRight');
+  }
+
   consumeWShift(): number {
     if (this.wShiftQueue === 0) {
       return 0;

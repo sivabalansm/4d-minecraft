@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BlockType, CHUNK_SIZE, RENDER_DISTANCE } from '../constants';
+import { BlockType, CHUNK_SIZE, RENDER_DISTANCE, SOLID_BLOCKS } from '../constants';
 import { createTextureAtlas } from '../rendering/TextureAtlas';
 import { Chunk } from './Chunk';
 import { meshChunk } from './ChunkMesher';
@@ -11,14 +11,17 @@ const MAX_CHUNK_Y = 3;
 export class World {
   private chunks: Map<string, Chunk>;
   private meshes: Map<string, THREE.Mesh>;
+  private waterMeshes: Map<string, THREE.Mesh>;
   private ghostMeshesWMinus: Map<string, THREE.Mesh>;
   private ghostMeshesWPlus: Map<string, THREE.Mesh>;
   private meshPool: THREE.Mesh[];
+  private waterMeshPool: THREE.Mesh[];
   private worldGen: WorldGen;
   private scene: THREE.Scene;
   private currentW: number;
   private atlasTexture: THREE.CanvasTexture;
   private chunkMaterial: THREE.MeshLambertMaterial;
+  private waterMaterial: THREE.MeshLambertMaterial;
   private ghostMaterialMinus: THREE.MeshLambertMaterial;
   private ghostMaterialPlus: THREE.MeshLambertMaterial;
   private ghostsEnabled: boolean;
@@ -26,9 +29,11 @@ export class World {
   constructor(scene: THREE.Scene, seed: string) {
     this.chunks = new Map();
     this.meshes = new Map();
+    this.waterMeshes = new Map();
     this.ghostMeshesWMinus = new Map();
     this.ghostMeshesWPlus = new Map();
     this.meshPool = [];
+    this.waterMeshPool = [];
     this.worldGen = new WorldGen(seed);
     this.scene = scene;
     this.currentW = 0;
@@ -36,6 +41,14 @@ export class World {
     this.chunkMaterial = new THREE.MeshLambertMaterial({
       map: this.atlasTexture,
       vertexColors: true,
+    });
+    this.waterMaterial = new THREE.MeshLambertMaterial({
+      map: this.atlasTexture,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
     this.ghostMaterialMinus = new THREE.MeshLambertMaterial({
       map: this.atlasTexture,
@@ -139,19 +152,22 @@ export class World {
           const meshKey = this.meshKey(cx, cy, cz);
           requiredMeshes.add(meshKey);
 
-          if (this.meshes.has(meshKey)) {
+          if (this.meshes.has(meshKey) || this.waterMeshes.has(meshKey)) {
             continue;
           }
 
           const chunk = this.getOrCreateChunk(cx, cy, cz, this.currentW);
-          const mesh = this.createChunkMesh(chunk);
+          const [mesh, waterMesh] = this.createChunkMeshes(chunk);
 
-          if (!mesh) {
-            continue;
+          if (mesh) {
+            this.meshes.set(meshKey, mesh);
+            this.scene.add(mesh);
           }
 
-          this.meshes.set(meshKey, mesh);
-          this.scene.add(mesh);
+          if (waterMesh) {
+            this.waterMeshes.set(meshKey, waterMesh);
+            this.scene.add(waterMesh);
+          }
         }
       }
     }
@@ -164,6 +180,16 @@ export class World {
       this.scene.remove(mesh);
       this.releaseMesh(mesh);
       this.meshes.delete(key);
+    }
+
+    for (const [key, waterMesh] of this.waterMeshes.entries()) {
+      if (requiredMeshes.has(key)) {
+        continue;
+      }
+
+      this.scene.remove(waterMesh);
+      this.releaseWaterMesh(waterMesh);
+      this.waterMeshes.delete(key);
     }
 
     this.preloadWLayers(playerX, playerZ);
@@ -271,7 +297,13 @@ export class World {
       this.releaseMesh(mesh);
     }
 
+    for (const waterMesh of this.waterMeshes.values()) {
+      this.scene.remove(waterMesh);
+      this.releaseWaterMesh(waterMesh);
+    }
+
     this.meshes.clear();
+    this.waterMeshes.clear();
     this.clearGhostMeshes();
     this.currentW = newW;
   }
@@ -284,12 +316,13 @@ export class World {
     const feetBlock = this.getBlockAtW(blockX, blockY, blockZ, ww);
     const headBlock = this.getBlockAtW(blockX, blockY + 1, blockZ, ww);
 
-    return feetBlock === BlockType.AIR && headBlock === BlockType.AIR;
+    return !SOLID_BLOCKS.has(feetBlock) && !SOLID_BLOCKS.has(headBlock);
   }
 
   private remeshChunk(cx: number, cy: number, cz: number): void {
     const key = this.meshKey(cx, cy, cz);
     const oldMesh = this.meshes.get(key);
+    const oldWaterMesh = this.waterMeshes.get(key);
 
     if (oldMesh) {
       this.scene.remove(oldMesh);
@@ -297,19 +330,30 @@ export class World {
       this.meshes.delete(key);
     }
 
-    const chunk = this.getOrCreateChunk(cx, cy, cz, this.currentW);
-    const newMesh = this.createChunkMesh(chunk);
-
-    if (!newMesh) {
-      return;
+    if (oldWaterMesh) {
+      this.scene.remove(oldWaterMesh);
+      this.releaseWaterMesh(oldWaterMesh);
+      this.waterMeshes.delete(key);
     }
 
-    this.meshes.set(key, newMesh);
-    this.scene.add(newMesh);
+    const chunk = this.getOrCreateChunk(cx, cy, cz, this.currentW);
+    const [newMesh, newWaterMesh] = this.createChunkMeshes(chunk);
+
+    if (newMesh) {
+      this.meshes.set(key, newMesh);
+      this.scene.add(newMesh);
+    }
+
+    if (newWaterMesh) {
+      this.waterMeshes.set(key, newWaterMesh);
+      this.scene.add(newWaterMesh);
+    }
   }
 
   private remeshChunkIfExists(cx: number, cy: number, cz: number): void {
-    if (!this.meshes.has(this.meshKey(cx, cy, cz))) {
+    const key = this.meshKey(cx, cy, cz);
+
+    if (!this.meshes.has(key) && !this.waterMeshes.has(key)) {
       return;
     }
 
@@ -324,40 +368,80 @@ export class World {
     return `${cx},${cy},${cz}`;
   }
 
-  private createChunkMesh(chunk: Chunk): THREE.Mesh | null {
+  private createChunkMeshes(chunk: Chunk): [THREE.Mesh | null, THREE.Mesh | null] {
     if (chunk.isEmpty()) {
-      return null;
+      return [null, null];
     }
 
-    const meshData = meshChunk(chunk, (wx, wy, wz) => this.getBlock(wx, wy, wz));
+    const getCurrentWorldBlock = (wx: number, wy: number, wz: number): BlockType =>
+      this.getBlock(wx, wy, wz);
 
-    if (meshData.vertexCount === 0) {
-      return null;
-    }
-
-    const mesh = this.meshPool.pop() ?? new THREE.Mesh(new THREE.BufferGeometry(), this.chunkMaterial);
-    const geometry = mesh.geometry as THREE.BufferGeometry;
-    this.clearGeometry(geometry);
-
-    geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(meshData.colors, 3));
-    geometry.setAttribute('uv', new THREE.BufferAttribute(meshData.uvs, 2));
-    geometry.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
-    mesh.material = this.chunkMaterial;
-    mesh.position.set(
-      chunk.cx * CHUNK_SIZE,
-      chunk.cy * CHUNK_SIZE,
-      chunk.cz * CHUNK_SIZE,
+    const opaqueMeshData = meshChunk(
+      chunk,
+      getCurrentWorldBlock,
+      (blockType) => blockType !== BlockType.AIR && blockType !== BlockType.WATER,
+    );
+    const waterMeshData = meshChunk(
+      chunk,
+      getCurrentWorldBlock,
+      (blockType) => blockType === BlockType.WATER,
     );
 
-    return mesh;
+    let opaqueMesh: THREE.Mesh | null = null;
+    let waterMesh: THREE.Mesh | null = null;
+
+    if (opaqueMeshData.vertexCount > 0) {
+      opaqueMesh = this.meshPool.pop() ?? new THREE.Mesh(new THREE.BufferGeometry(), this.chunkMaterial);
+      const opaqueGeometry = opaqueMesh.geometry as THREE.BufferGeometry;
+      this.clearGeometry(opaqueGeometry);
+
+      opaqueGeometry.setAttribute('position', new THREE.BufferAttribute(opaqueMeshData.positions, 3));
+      opaqueGeometry.setAttribute('normal', new THREE.BufferAttribute(opaqueMeshData.normals, 3));
+      opaqueGeometry.setAttribute('color', new THREE.BufferAttribute(opaqueMeshData.colors, 3));
+      opaqueGeometry.setAttribute('uv', new THREE.BufferAttribute(opaqueMeshData.uvs, 2));
+      opaqueGeometry.setIndex(new THREE.BufferAttribute(opaqueMeshData.indices, 1));
+      opaqueMesh.material = this.chunkMaterial;
+      opaqueMesh.position.set(
+        chunk.cx * CHUNK_SIZE,
+        chunk.cy * CHUNK_SIZE,
+        chunk.cz * CHUNK_SIZE,
+      );
+      opaqueMesh.renderOrder = 0;
+    }
+
+    if (waterMeshData.vertexCount > 0) {
+      waterMesh =
+        this.waterMeshPool.pop() ?? new THREE.Mesh(new THREE.BufferGeometry(), this.waterMaterial);
+      const waterGeometry = waterMesh.geometry as THREE.BufferGeometry;
+      this.clearGeometry(waterGeometry);
+
+      waterGeometry.setAttribute('position', new THREE.BufferAttribute(waterMeshData.positions, 3));
+      waterGeometry.setAttribute('normal', new THREE.BufferAttribute(waterMeshData.normals, 3));
+      waterGeometry.setAttribute('color', new THREE.BufferAttribute(waterMeshData.colors, 3));
+      waterGeometry.setAttribute('uv', new THREE.BufferAttribute(waterMeshData.uvs, 2));
+      waterGeometry.setIndex(new THREE.BufferAttribute(waterMeshData.indices, 1));
+      waterMesh.material = this.waterMaterial;
+      waterMesh.position.set(
+        chunk.cx * CHUNK_SIZE,
+        chunk.cy * CHUNK_SIZE,
+        chunk.cz * CHUNK_SIZE,
+      );
+      waterMesh.renderOrder = 2;
+    }
+
+    return [opaqueMesh, waterMesh];
   }
 
   private releaseMesh(mesh: THREE.Mesh): void {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     this.clearGeometry(geometry);
     this.meshPool.push(mesh);
+  }
+
+  private releaseWaterMesh(mesh: THREE.Mesh): void {
+    const geometry = mesh.geometry as THREE.BufferGeometry;
+    this.clearGeometry(geometry);
+    this.waterMeshPool.push(mesh);
   }
 
   private clearGeometry(geometry: THREE.BufferGeometry): void {

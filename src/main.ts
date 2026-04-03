@@ -1,7 +1,10 @@
 import * as THREE from 'three';
-import { BASE_HEIGHT, BlockType, CHUNK_SIZE } from './constants';
+import { BASE_HEIGHT, BlockType, CHUNK_SIZE, SOLID_BLOCKS } from './constants';
+import { SoundManager } from './audio/SoundManager';
+import { Mob } from './entities/Mob';
 import { Controls } from './player/Controls';
 import { Player } from './player/Player';
+import { WMinimap } from './ui/WMinimap';
 import { RaycastResult, voxelRaycast } from './world/VoxelRaycast';
 import { World } from './world/World';
 
@@ -18,7 +21,7 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(SKY_COLOR);
-scene.fog = new THREE.Fog(SKY_COLOR, 100, 300);
+scene.fog = new THREE.Fog(SKY_COLOR, 150, 400);
 
 const camera = new THREE.PerspectiveCamera(
   75,
@@ -37,7 +40,50 @@ scene.add(directionalLight);
 const world = new World(scene, '4d-minecraft-seed');
 const player = new Player(CHUNK_SIZE * 2, BASE_HEIGHT + 10, CHUNK_SIZE * 2, 0);
 const controls = new Controls(camera, renderer.domElement);
+const soundManager = new SoundManager();
+const minimap = new WMinimap();
 const timer = new THREE.Timer();
+
+const cloudCanvas = document.createElement('canvas');
+cloudCanvas.width = 256;
+cloudCanvas.height = 256;
+const cloudCtx = cloudCanvas.getContext('2d');
+
+if (!cloudCtx) {
+  throw new Error('Failed to create cloud texture context');
+}
+
+cloudCtx.clearRect(0, 0, cloudCanvas.width, cloudCanvas.height);
+
+for (let i = 0; i < 20; i++) {
+  const x = Math.random() * cloudCanvas.width;
+  const y = Math.random() * cloudCanvas.height;
+  const radius = 20 + Math.random() * 40;
+  const alpha = 0.2 + Math.random() * 0.35;
+
+  cloudCtx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
+  cloudCtx.beginPath();
+  cloudCtx.arc(x, y, radius, 0, Math.PI * 2);
+  cloudCtx.fill();
+}
+
+const cloudTexture = new THREE.CanvasTexture(cloudCanvas);
+cloudTexture.wrapS = THREE.RepeatWrapping;
+cloudTexture.wrapT = THREE.RepeatWrapping;
+cloudTexture.repeat.set(8, 8);
+cloudTexture.needsUpdate = true;
+
+const cloudMaterial = new THREE.MeshBasicMaterial({
+  map: cloudTexture,
+  transparent: true,
+  opacity: 0.4,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
+const clouds = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), cloudMaterial);
+clouds.rotation.x = -Math.PI / 2;
+clouds.position.y = 100;
+scene.add(clouds);
 
 const MOVE_SPEED = 5;
 const JUMP_VELOCITY = 8;
@@ -48,18 +94,40 @@ const AIR_DAMPING = 2;
 const LOAD_DISTANCE_SQ = 4;
 const COLLISION_EPSILON = 1e-6;
 const MAX_INTERACT_DISTANCE = 8;
+const SPRINT_SPEED_MULTIPLIER = 1.6;
+const WALK_FOV = 75;
+const SPRINT_FOV = 85;
+const DOUBLE_TAP_SPRINT_WINDOW = 0.28;
+const FOOTSTEP_INTERVAL_WALK = 0.4;
+const FOOTSTEP_INTERVAL_SPRINT = 0.25;
+const PORTAL_COOLDOWN = 0.5;
+const MAX_MOBS = 8;
 const UP = new THREE.Vector3(0, 1, 0);
 const cameraDirection = new THREE.Vector3();
 const lastLoadedPosition = new THREE.Vector3(player.position.x, player.position.y, player.position.z);
 
 let selectedBlockType = BlockType.STONE;
 let currentTarget: RaycastResult | null = null;
+let isSprinting = false;
+let sprintArmedByDoubleTap = false;
+let lastForwardTapTime = -Infinity;
+let lastFootstepTime = 0;
+let lastMinimapUpdate = 0;
+let lastMobSpawn = 0;
+let portalCooldownRemaining = 0;
+let audioResumed = false;
+const mobs: Mob[] = [];
 
 const BLOCK_TYPE_NAMES: Record<BlockType, string> = {
   [BlockType.AIR]: 'AIR',
   [BlockType.STONE]: 'STONE',
   [BlockType.DIRT]: 'DIRT',
   [BlockType.GRASS]: 'GRASS',
+  [BlockType.WATER]: 'WATER',
+  [BlockType.WOOD]: 'WOOD',
+  [BlockType.LEAVES]: 'LEAVES',
+  [BlockType.SAND]: 'SAND',
+  [BlockType.PORTAL]: 'PORTAL',
 };
 
 const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
@@ -119,6 +187,16 @@ ghostDisplay.style.fontFamily = 'monospace';
 ghostDisplay.style.fontSize = '14px';
 ghostDisplay.style.textShadow = '1px 1px 2px black';
 
+const sprintDisplay = document.createElement('div');
+sprintDisplay.style.position = 'absolute';
+sprintDisplay.style.top = '70px';
+sprintDisplay.style.left = '10px';
+sprintDisplay.style.color = '#ffe566';
+sprintDisplay.style.fontFamily = 'monospace';
+sprintDisplay.style.fontSize = '14px';
+sprintDisplay.style.textShadow = '1px 1px 2px black';
+sprintDisplay.style.display = 'none';
+
 const controlsHelp = document.createElement('div');
 controlsHelp.style.position = 'absolute';
 controlsHelp.style.bottom = '10px';
@@ -128,7 +206,7 @@ controlsHelp.style.fontFamily = 'monospace';
 controlsHelp.style.fontSize = '12px';
 controlsHelp.style.textShadow = '1px 1px 2px black';
 controlsHelp.innerHTML =
-  'WASD: Move | Space: Jump | Q/E: Shift W-dimension | G: Toggle Ghosts<br>Left Click: Destroy | Right Click: Place | 1-3: Select Block';
+  'WASD: Move | Ctrl/Double-tap W: Sprint | Space: Jump | Q/E: Shift W-dimension | G: Toggle Ghosts<br>Left Click: Destroy | Right Click: Place | 1-8: Select Block';
 
 const clickToPlay = document.createElement('div');
 clickToPlay.style.position = 'absolute';
@@ -142,13 +220,32 @@ clickToPlay.style.textShadow = '2px 2px 4px black';
 clickToPlay.style.textAlign = 'center';
 clickToPlay.innerHTML = 'Click to Play<br><span style="font-size: 14px; opacity: 0.7;">4D Minecraft</span>';
 
-hud.append(crosshair, wDisplay, blockDisplay, ghostDisplay, controlsHelp, clickToPlay);
+hud.append(crosshair, wDisplay, blockDisplay, ghostDisplay, sprintDisplay, controlsHelp, clickToPlay);
 document.body.appendChild(hud);
+
+const transitionOverlay = document.createElement('div');
+transitionOverlay.style.cssText =
+  'position:fixed;top:0;left:0;width:100%;height:100%;background:white;opacity:0;pointer-events:none;z-index:5;transition:opacity 0.15s ease-out;';
+document.body.appendChild(transitionOverlay);
+
+function flashTransition(): void {
+  transitionOverlay.style.opacity = '0.4';
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      transitionOverlay.style.opacity = '0';
+    });
+  });
+}
 
 function getSelectedBlockShortcut(type: BlockType): string {
   if (type === BlockType.STONE) return '1';
   if (type === BlockType.DIRT) return '2';
   if (type === BlockType.GRASS) return '3';
+  if (type === BlockType.WATER) return '4';
+  if (type === BlockType.WOOD) return '5';
+  if (type === BlockType.LEAVES) return '6';
+  if (type === BlockType.SAND) return '7';
+  if (type === BlockType.PORTAL) return '8';
   return '?';
 }
 
@@ -156,10 +253,29 @@ function updateHudText(): void {
   wDisplay.textContent = `W: ${world.getCurrentW()}`;
   blockDisplay.textContent = `Block: ${BLOCK_TYPE_NAMES[selectedBlockType]} [${getSelectedBlockShortcut(selectedBlockType)}]`;
   ghostDisplay.textContent = `Ghosts: ${world.areGhostsEnabled() ? 'ON' : 'OFF'}`;
+  sprintDisplay.textContent = isSprinting ? 'Sprinting' : '';
+  sprintDisplay.style.display = isSprinting ? 'block' : 'none';
   clickToPlay.style.display = controls.isPointerLocked() ? 'none' : 'block';
 }
 
+renderer.domElement.addEventListener('click', () => {
+  if (audioResumed) {
+    return;
+  }
+
+  soundManager.resume();
+  audioResumed = true;
+});
+
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'KeyW' && !event.repeat) {
+    const now = performance.now() / 1000;
+    if (now - lastForwardTapTime <= DOUBLE_TAP_SPRINT_WINDOW) {
+      sprintArmedByDoubleTap = true;
+    }
+    lastForwardTapTime = now;
+  }
+
   if (event.code === 'KeyG' && !event.repeat) {
     const enabled = !world.areGhostsEnabled();
     world.setGhostsEnabled(enabled);
@@ -173,6 +289,16 @@ window.addEventListener('keydown', (event) => {
     selectedBlockType = BlockType.DIRT;
   } else if (event.code === 'Digit3') {
     selectedBlockType = BlockType.GRASS;
+  } else if (event.code === 'Digit4') {
+    selectedBlockType = BlockType.WATER;
+  } else if (event.code === 'Digit5') {
+    selectedBlockType = BlockType.WOOD;
+  } else if (event.code === 'Digit6') {
+    selectedBlockType = BlockType.LEAVES;
+  } else if (event.code === 'Digit7') {
+    selectedBlockType = BlockType.SAND;
+  } else if (event.code === 'Digit8') {
+    selectedBlockType = BlockType.PORTAL;
   } else {
     return;
   }
@@ -180,10 +306,16 @@ window.addEventListener('keydown', (event) => {
   updateHudText();
 });
 
+window.addEventListener('keyup', (event) => {
+  if (event.code === 'KeyW') {
+    sprintArmedByDoubleTap = false;
+  }
+});
+
 updateHudText();
 
 function isSolidBlock(wx: number, wy: number, wz: number): boolean {
-  return world.getBlock(wx, wy, wz) !== BlockType.AIR;
+  return SOLID_BLOCKS.has(world.getBlock(wx, wy, wz));
 }
 
 function isSolidRange(
@@ -340,6 +472,47 @@ function tryShiftW(): void {
   world.setW(targetW);
   world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
   world.loadGhosts(player.position.x, player.position.y, player.position.z);
+  clearMobs();
+  soundManager.playWShift();
+  flashTransition();
+  portalCooldownRemaining = PORTAL_COOLDOWN;
+  lastLoadedPosition.copy(player.position);
+}
+
+function clearMobs(): void {
+  for (const mob of mobs) {
+    mob.dispose(scene);
+  }
+  mobs.length = 0;
+}
+
+function checkPortalTeleport(): void {
+  if (portalCooldownRemaining > 0) {
+    return;
+  }
+
+  const blockX = Math.floor(player.position.x);
+  const blockY = Math.floor(player.position.y);
+  const blockZ = Math.floor(player.position.z);
+  const blockAtFeet = world.getBlock(blockX, blockY, blockZ);
+
+  if (blockAtFeet !== BlockType.PORTAL) {
+    return;
+  }
+
+  const targetW = player.w === 0 ? 3 : 0;
+  if (!world.isPositionSafe(player.position.x, player.position.y, player.position.z, targetW)) {
+    return;
+  }
+
+  player.w = targetW;
+  world.setW(targetW);
+  world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+  world.loadGhosts(player.position.x, player.position.y, player.position.z);
+  clearMobs();
+  soundManager.playWShift();
+  flashTransition();
+  portalCooldownRemaining = PORTAL_COOLDOWN;
   lastLoadedPosition.copy(player.position);
 }
 
@@ -407,6 +580,7 @@ function handleBlockInteractions(): void {
 
   if (shouldDestroy) {
     world.setBlock(currentTarget.blockX, currentTarget.blockY, currentTarget.blockZ, BlockType.AIR);
+    soundManager.playBlockBreak();
   }
 
   if (!shouldPlace) {
@@ -422,9 +596,43 @@ function handleBlockInteractions(): void {
   }
 
   world.setBlock(placeX, placeY, placeZ, selectedBlockType);
+  soundManager.playBlockPlace();
 }
 
-function updatePlayer(dt: number): void {
+function spawnMobs(): void {
+  if (mobs.length >= MAX_MOBS) {
+    return;
+  }
+
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 20 + Math.random() * 20;
+  const spawnX = player.position.x + Math.cos(angle) * dist;
+  const spawnZ = player.position.z + Math.sin(angle) * dist;
+
+  for (let y = 60; y >= 0; y--) {
+    if (SOLID_BLOCKS.has(world.getBlock(Math.floor(spawnX), y, Math.floor(spawnZ)))) {
+      mobs.push(new Mob(spawnX, y + 1, spawnZ, player.w, scene));
+      return;
+    }
+  }
+}
+
+function updateMobs(dt: number): void {
+  for (const mob of mobs) {
+    mob.update(dt, (x, y, z) => world.getBlockAtW(x, y, z, mob.w));
+  }
+
+  for (let i = mobs.length - 1; i >= 0; i--) {
+    const mob = mobs[i];
+    if (mob.position.distanceTo(player.position) > 80 || mob.w !== player.w) {
+      mob.dispose(scene);
+      mobs.splice(i, 1);
+    }
+  }
+}
+
+function updatePlayer(dt: number, elapsed: number): void {
+  portalCooldownRemaining = Math.max(0, portalCooldownRemaining - dt);
   tryShiftW();
 
   const forward = new THREE.Vector3();
@@ -437,8 +645,9 @@ function updatePlayer(dt: number): void {
 
   const right = new THREE.Vector3().crossVectors(forward, UP).normalize();
   const moveDirection = new THREE.Vector3();
+  const forwardPressed = controls.isMoveForwardPressed();
 
-  if (controls.isMoveForwardPressed()) {
+  if (forwardPressed) {
     moveDirection.add(forward);
   }
 
@@ -455,10 +664,15 @@ function updatePlayer(dt: number): void {
   }
 
   if (moveDirection.lengthSq() > 0) {
+    const sprintRequested =
+      (controls.isSprintPressed() || sprintArmedByDoubleTap) && forwardPressed && player.onGround;
+    isSprinting = sprintRequested;
+    const currentSpeed = isSprinting ? MOVE_SPEED * SPRINT_SPEED_MULTIPLIER : MOVE_SPEED;
     moveDirection.normalize();
-    player.velocity.x = moveDirection.x * MOVE_SPEED;
-    player.velocity.z = moveDirection.z * MOVE_SPEED;
+    player.velocity.x = moveDirection.x * currentSpeed;
+    player.velocity.z = moveDirection.z * currentSpeed;
   } else {
+    isSprinting = false;
     const damping = Math.exp(-(player.onGround ? GROUND_DAMPING : AIR_DAMPING) * dt);
     player.velocity.x *= damping;
     player.velocity.z *= damping;
@@ -467,6 +681,7 @@ function updatePlayer(dt: number): void {
   if (controls.isJumpPressed() && player.onGround) {
     player.velocity.y = JUMP_VELOCITY;
     player.onGround = false;
+    soundManager.playJump();
   }
 
   if (controls.isDescendPressed() && !player.onGround) {
@@ -479,10 +694,20 @@ function updatePlayer(dt: number): void {
   resolveX(player.velocity.x * dt);
   resolveY(player.velocity.y * dt);
   resolveZ(player.velocity.z * dt);
+  checkPortalTeleport();
 
   if (!player.onGround && player.velocity.y <= 0 && hasGroundSupport()) {
     player.onGround = true;
     player.velocity.y = 0;
+  }
+
+  const movingHorizontally = Math.hypot(player.velocity.x, player.velocity.z) > 0.25;
+  if (controls.isPointerLocked() && player.onGround && movingHorizontally) {
+    const interval = isSprinting ? FOOTSTEP_INTERVAL_SPRINT : FOOTSTEP_INTERVAL_WALK;
+    if (elapsed - lastFootstepTime >= interval) {
+      soundManager.playFootstep();
+      lastFootstepTime = elapsed;
+    }
   }
 
   camera.position.copy(player.getEyePosition());
@@ -552,7 +777,26 @@ function animate(): void {
   requestAnimationFrame(animate);
   timer.update();
   const dt = Math.min(timer.getDelta(), 0.1);
-  updatePlayer(dt);
+  const elapsed = timer.getElapsed();
+  updatePlayer(dt, elapsed);
+
+  if (elapsed - lastMobSpawn > 2) {
+    spawnMobs();
+    lastMobSpawn = elapsed;
+  }
+  updateMobs(dt);
+
+  if (elapsed - lastMinimapUpdate > 0.5) {
+    minimap.update(player.position.x, player.position.z, player.w, world);
+    lastMinimapUpdate = elapsed;
+  }
+
+  const targetFov = isSprinting ? SPRINT_FOV : WALK_FOV;
+  camera.fov += (targetFov - camera.fov) * 0.1;
+  camera.updateProjectionMatrix();
+
+  clouds.position.x = player.position.x + Math.sin(elapsed * 0.5) * 10;
+  clouds.position.z = player.position.z + Math.cos(elapsed * 0.3) * 10;
   updateTargetBlock();
   handleBlockInteractions();
   updateHudText();

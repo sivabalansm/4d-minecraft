@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BlockType } from '../constants';
 
 const TILE_SIZE = 16;
-export const ATLAS_TILES = 4;
+export const ATLAS_TILES = 9;
 const ATLAS_WIDTH = TILE_SIZE * ATLAS_TILES;
 const ATLAS_HEIGHT = TILE_SIZE;
 
@@ -12,12 +12,25 @@ type TileSet = {
   side: number;
 };
 
-type TexturedBlockType = BlockType.STONE | BlockType.DIRT | BlockType.GRASS;
+type TexturedBlockType =
+  | BlockType.STONE
+  | BlockType.DIRT
+  | BlockType.GRASS
+  | BlockType.WATER
+  | BlockType.WOOD
+  | BlockType.LEAVES
+  | BlockType.SAND
+  | BlockType.PORTAL;
 
 export const TILE_MAP: Record<TexturedBlockType, TileSet> = {
   [BlockType.STONE]: { top: 3, bottom: 3, side: 3 },
   [BlockType.DIRT]: { top: 2, bottom: 2, side: 2 },
   [BlockType.GRASS]: { top: 0, bottom: 2, side: 1 },
+  [BlockType.WATER]: { top: 4, bottom: 4, side: 4 },
+  [BlockType.WOOD]: { top: 5, bottom: 5, side: 5 },
+  [BlockType.LEAVES]: { top: 6, bottom: 6, side: 6 },
+  [BlockType.SAND]: { top: 7, bottom: 7, side: 7 },
+  [BlockType.PORTAL]: { top: 8, bottom: 8, side: 8 },
 };
 
 function getNoise(tileIndex: number, x: number, y: number): number {
@@ -140,6 +153,93 @@ function drawStone(ctx: CanvasRenderingContext2D, tileIndex: number): void {
   }
 }
 
+function drawWater(ctx: CanvasRenderingContext2D, tileIndex: number): void {
+  fillTile(ctx, tileIndex, '#2266AA');
+
+  for (let y = 0; y < TILE_SIZE; y++) {
+    for (let x = 0; x < TILE_SIZE; x++) {
+      const noise = getNoise(tileIndex, x, y);
+      const ripple = (x + y * 2) % 6;
+
+      if ((ripple === 0 || ripple === 1) && noise > 0.35) {
+        fillPixel(ctx, tileIndex, x, y, '#4488CC');
+      } else if (noise < 0.08) {
+        fillPixel(ctx, tileIndex, x, y, '#19558F');
+      }
+    }
+  }
+}
+
+function drawWood(ctx: CanvasRenderingContext2D, tileIndex: number): void {
+  fillTile(ctx, tileIndex, '#8B5A2B');
+
+  for (let y = 0; y < TILE_SIZE; y++) {
+    for (let x = 0; x < TILE_SIZE; x++) {
+      const noise = getNoise(tileIndex, x, y);
+
+      if (x % 4 === 0 || (x + y) % 9 === 0) {
+        fillPixel(ctx, tileIndex, x, y, '#6B3A1B');
+      } else if (noise < 0.1) {
+        fillPixel(ctx, tileIndex, x, y, '#9C6A39');
+      }
+    }
+  }
+}
+
+function drawLeaves(ctx: CanvasRenderingContext2D, tileIndex: number): void {
+  fillTile(ctx, tileIndex, '#1B7A1B');
+
+  for (let y = 0; y < TILE_SIZE; y++) {
+    for (let x = 0; x < TILE_SIZE; x++) {
+      const noise = getNoise(tileIndex, x, y);
+
+      if (noise > 0.82) {
+        fillPixel(ctx, tileIndex, x, y, '#39A839');
+      } else if (noise < 0.08) {
+        fillPixel(ctx, tileIndex, x, y, '#145C14');
+      } else if (noise > 0.44 && noise < 0.5) {
+        fillPixel(ctx, tileIndex, x, y, '#255F25');
+      }
+    }
+  }
+}
+
+function drawSand(ctx: CanvasRenderingContext2D, tileIndex: number): void {
+  fillTile(ctx, tileIndex, '#D4C088');
+
+  for (let y = 0; y < TILE_SIZE; y++) {
+    for (let x = 0; x < TILE_SIZE; x++) {
+      const noise = getNoise(tileIndex, x, y);
+
+      if (noise > 0.84) {
+        fillPixel(ctx, tileIndex, x, y, '#E3D2A0');
+      } else if (noise < 0.1) {
+        fillPixel(ctx, tileIndex, x, y, '#BFA56D');
+      }
+    }
+  }
+}
+
+function drawPortal(ctx: CanvasRenderingContext2D, tileIndex: number): void {
+  fillTile(ctx, tileIndex, '#7722CC');
+
+  for (let y = 0; y < TILE_SIZE; y++) {
+    for (let x = 0; x < TILE_SIZE; x++) {
+      const centeredX = x - TILE_SIZE / 2 + 0.5;
+      const centeredY = y - TILE_SIZE / 2 + 0.5;
+      const distance = Math.sqrt(centeredX * centeredX + centeredY * centeredY);
+      const swirl = Math.sin(distance * 1.8 + Math.atan2(centeredY, centeredX) * 3);
+      const noise = getNoise(tileIndex, x, y);
+
+      if (swirl > 0.45 && noise > 0.3) {
+        fillPixel(ctx, tileIndex, x, y, '#CC44FF');
+      } else if (noise < 0.08) {
+        fillPixel(ctx, tileIndex, x, y, '#5E19A3');
+      }
+    }
+  }
+}
+
 export function getBlockFaceTileIndex(blockType: BlockType, faceIndex: number): number {
   if (blockType === BlockType.AIR) {
     return 0;
@@ -175,6 +275,11 @@ export function createTextureAtlas(): THREE.CanvasTexture {
   drawGrassSide(ctx, 1);
   drawDirt(ctx, 2);
   drawStone(ctx, 3);
+  drawWater(ctx, 4);
+  drawWood(ctx, 5);
+  drawLeaves(ctx, 6);
+  drawSand(ctx, 7);
+  drawPortal(ctx, 8);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = THREE.NearestFilter;
