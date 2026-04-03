@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BlockType, CHUNK_SIZE, RENDER_DISTANCE } from '../constants';
+import { createTextureAtlas } from '../rendering/TextureAtlas';
 import { Chunk } from './Chunk';
 import { meshChunk } from './ChunkMesher';
 import { WorldGen } from './WorldGen';
@@ -10,20 +11,53 @@ const MAX_CHUNK_Y = 3;
 export class World {
   private chunks: Map<string, Chunk>;
   private meshes: Map<string, THREE.Mesh>;
+  private ghostMeshesWMinus: Map<string, THREE.Mesh>;
+  private ghostMeshesWPlus: Map<string, THREE.Mesh>;
   private meshPool: THREE.Mesh[];
   private worldGen: WorldGen;
   private scene: THREE.Scene;
   private currentW: number;
+  private atlasTexture: THREE.CanvasTexture;
   private chunkMaterial: THREE.MeshLambertMaterial;
+  private ghostMaterialMinus: THREE.MeshLambertMaterial;
+  private ghostMaterialPlus: THREE.MeshLambertMaterial;
+  private ghostsEnabled: boolean;
 
   constructor(scene: THREE.Scene, seed: string) {
     this.chunks = new Map();
     this.meshes = new Map();
+    this.ghostMeshesWMinus = new Map();
+    this.ghostMeshesWPlus = new Map();
     this.meshPool = [];
     this.worldGen = new WorldGen(seed);
     this.scene = scene;
     this.currentW = 0;
-    this.chunkMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+    this.atlasTexture = createTextureAtlas();
+    this.chunkMaterial = new THREE.MeshLambertMaterial({
+      map: this.atlasTexture,
+      vertexColors: true,
+    });
+    this.ghostMaterialMinus = new THREE.MeshLambertMaterial({
+      map: this.atlasTexture,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+      color: new THREE.Color(0.4, 0.6, 1.0),
+    });
+    this.ghostMaterialPlus = new THREE.MeshLambertMaterial({
+      map: this.atlasTexture,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+      color: new THREE.Color(1.0, 0.6, 0.3),
+    });
+    this.ghostsEnabled = true;
+  }
+
+  getAtlasTexture(): THREE.CanvasTexture {
+    return this.atlasTexture;
   }
 
   getOrCreateChunk(cx: number, cy: number, cz: number, cw: number): Chunk {
@@ -152,6 +186,81 @@ export class World {
     }
   }
 
+  loadGhosts(playerX: number, _playerY: number, playerZ: number): void {
+    this.clearGhostMeshes();
+
+    if (!this.ghostsEnabled) {
+      return;
+    }
+
+    const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
+    const centerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+    const GHOST_DISTANCE = 2;
+
+    for (const [dw, ghostMeshMap, material] of [
+      [-1, this.ghostMeshesWMinus, this.ghostMaterialMinus],
+      [1, this.ghostMeshesWPlus, this.ghostMaterialPlus],
+    ] as const) {
+      const targetW = this.currentW + dw;
+
+      for (let cz = centerChunkZ - GHOST_DISTANCE; cz <= centerChunkZ + GHOST_DISTANCE; cz++) {
+        for (let cx = centerChunkX - GHOST_DISTANCE; cx <= centerChunkX + GHOST_DISTANCE; cx++) {
+          for (let cy = MIN_CHUNK_Y; cy <= MAX_CHUNK_Y; cy++) {
+            const chunk = this.getOrCreateChunk(cx, cy, cz, targetW);
+
+            if (chunk.isEmpty()) {
+              continue;
+            }
+
+            const meshData = meshChunk(chunk, (wx, wy, wz) => this.getBlockAtW(wx, wy, wz, targetW));
+
+            if (meshData.vertexCount === 0) {
+              continue;
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(meshData.colors, 3));
+            geometry.setAttribute('uv', new THREE.BufferAttribute(meshData.uvs, 2));
+            geometry.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(cx * CHUNK_SIZE, cy * CHUNK_SIZE, cz * CHUNK_SIZE);
+            mesh.renderOrder = 1;
+
+            const key = this.meshKey(cx, cy, cz);
+            ghostMeshMap.set(key, mesh);
+            this.scene.add(mesh);
+          }
+        }
+      }
+    }
+  }
+
+  clearGhostMeshes(): void {
+    for (const ghostMeshMap of [this.ghostMeshesWMinus, this.ghostMeshesWPlus]) {
+      for (const mesh of ghostMeshMap.values()) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+      }
+
+      ghostMeshMap.clear();
+    }
+  }
+
+  setGhostsEnabled(enabled: boolean): void {
+    this.ghostsEnabled = enabled;
+
+    if (!enabled) {
+      this.clearGhostMeshes();
+    }
+  }
+
+  areGhostsEnabled(): boolean {
+    return this.ghostsEnabled;
+  }
+
   getCurrentW(): number {
     return this.currentW;
   }
@@ -163,6 +272,7 @@ export class World {
     }
 
     this.meshes.clear();
+    this.clearGhostMeshes();
     this.currentW = newW;
   }
 
@@ -232,6 +342,7 @@ export class World {
     geometry.setAttribute('position', new THREE.BufferAttribute(meshData.positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(meshData.colors, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(meshData.uvs, 2));
     geometry.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
     mesh.material = this.chunkMaterial;
     mesh.position.set(
@@ -253,6 +364,7 @@ export class World {
     geometry.deleteAttribute('position');
     geometry.deleteAttribute('normal');
     geometry.deleteAttribute('color');
+    geometry.deleteAttribute('uv');
     geometry.setIndex(null);
   }
 }

@@ -109,6 +109,16 @@ blockDisplay.style.fontFamily = 'monospace';
 blockDisplay.style.fontSize = '14px';
 blockDisplay.style.textShadow = '1px 1px 2px black';
 
+const ghostDisplay = document.createElement('div');
+ghostDisplay.id = 'ghost-display';
+ghostDisplay.style.position = 'absolute';
+ghostDisplay.style.top = '50px';
+ghostDisplay.style.left = '10px';
+ghostDisplay.style.color = 'white';
+ghostDisplay.style.fontFamily = 'monospace';
+ghostDisplay.style.fontSize = '14px';
+ghostDisplay.style.textShadow = '1px 1px 2px black';
+
 const controlsHelp = document.createElement('div');
 controlsHelp.style.position = 'absolute';
 controlsHelp.style.bottom = '10px';
@@ -118,7 +128,7 @@ controlsHelp.style.fontFamily = 'monospace';
 controlsHelp.style.fontSize = '12px';
 controlsHelp.style.textShadow = '1px 1px 2px black';
 controlsHelp.innerHTML =
-  'WASD: Move | Space: Jump | Q/E: Shift W-dimension<br>Left Click: Destroy | Right Click: Place | 1-3: Select Block';
+  'WASD: Move | Space: Jump | Q/E: Shift W-dimension | G: Toggle Ghosts<br>Left Click: Destroy | Right Click: Place | 1-3: Select Block';
 
 const clickToPlay = document.createElement('div');
 clickToPlay.style.position = 'absolute';
@@ -132,7 +142,7 @@ clickToPlay.style.textShadow = '2px 2px 4px black';
 clickToPlay.style.textAlign = 'center';
 clickToPlay.innerHTML = 'Click to Play<br><span style="font-size: 14px; opacity: 0.7;">4D Minecraft</span>';
 
-hud.append(crosshair, wDisplay, blockDisplay, controlsHelp, clickToPlay);
+hud.append(crosshair, wDisplay, blockDisplay, ghostDisplay, controlsHelp, clickToPlay);
 document.body.appendChild(hud);
 
 function getSelectedBlockShortcut(type: BlockType): string {
@@ -145,11 +155,19 @@ function getSelectedBlockShortcut(type: BlockType): string {
 function updateHudText(): void {
   wDisplay.textContent = `W: ${world.getCurrentW()}`;
   blockDisplay.textContent = `Block: ${BLOCK_TYPE_NAMES[selectedBlockType]} [${getSelectedBlockShortcut(selectedBlockType)}]`;
+  ghostDisplay.textContent = `Ghosts: ${world.areGhostsEnabled() ? 'ON' : 'OFF'}`;
   clickToPlay.style.display = controls.isPointerLocked() ? 'none' : 'block';
 }
 
 window.addEventListener('keydown', (event) => {
-  if (event.code === 'Digit1') {
+  if (event.code === 'KeyG' && !event.repeat) {
+    const enabled = !world.areGhostsEnabled();
+    world.setGhostsEnabled(enabled);
+
+    if (enabled) {
+      world.loadGhosts(player.position.x, player.position.y, player.position.z);
+    }
+  } else if (event.code === 'Digit1') {
     selectedBlockType = BlockType.STONE;
   } else if (event.code === 'Digit2') {
     selectedBlockType = BlockType.DIRT;
@@ -321,6 +339,7 @@ function tryShiftW(): void {
   player.w = targetW;
   world.setW(targetW);
   world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+  world.loadGhosts(player.position.x, player.position.y, player.position.z);
   lastLoadedPosition.copy(player.position);
 }
 
@@ -470,6 +489,7 @@ function updatePlayer(dt: number): void {
 
   if (player.position.distanceToSquared(lastLoadedPosition) > LOAD_DISTANCE_SQ) {
     world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+    world.loadGhosts(player.position.x, player.position.y, player.position.z);
     lastLoadedPosition.copy(player.position);
   }
 }
@@ -526,6 +546,7 @@ camera.position.copy(player.getEyePosition());
 camera.lookAt(CHUNK_SIZE * 2, BASE_HEIGHT, CHUNK_SIZE * 2 + 50);
 
 world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+world.loadGhosts(player.position.x, player.position.y, player.position.z);
 
 function animate(): void {
   requestAnimationFrame(animate);
