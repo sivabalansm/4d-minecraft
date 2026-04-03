@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BASE_HEIGHT, BlockType, CHUNK_SIZE, SOLID_BLOCKS } from './constants';
 import { SoundManager } from './audio/SoundManager';
-import { Mob } from './entities/Mob';
+import { Mob, MobType } from './entities/Mob';
 import { Controls } from './player/Controls';
 import { Player } from './player/Player';
 import { WMinimap } from './ui/WMinimap';
@@ -9,6 +9,8 @@ import { RaycastResult, voxelRaycast } from './world/VoxelRaycast';
 import { World } from './world/World';
 
 const SKY_COLOR = 0x87CEEB;
+
+type WBiome = 'normal' | 'forest' | 'desert' | 'ice' | 'mushroom' | 'crystal' | 'nether';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -101,7 +103,7 @@ const DOUBLE_TAP_SPRINT_WINDOW = 0.28;
 const FOOTSTEP_INTERVAL_WALK = 0.4;
 const FOOTSTEP_INTERVAL_SPRINT = 0.25;
 const PORTAL_COOLDOWN = 0.5;
-const MAX_MOBS = 8;
+const MAX_MOBS = 12;
 const UP = new THREE.Vector3(0, 1, 0);
 const cameraDirection = new THREE.Vector3();
 const lastLoadedPosition = new THREE.Vector3(player.position.x, player.position.y, player.position.z);
@@ -128,6 +130,13 @@ const BLOCK_TYPE_NAMES: Record<BlockType, string> = {
   [BlockType.LEAVES]: 'LEAVES',
   [BlockType.SAND]: 'SAND',
   [BlockType.PORTAL]: 'PORTAL',
+  [BlockType.ICE]: 'ICE',
+  [BlockType.MUSHROOM_STEM]: 'MUSHROOM_STEM',
+  [BlockType.MUSHROOM_CAP]: 'MUSHROOM_CAP',
+  [BlockType.CRYSTAL]: 'CRYSTAL',
+  [BlockType.OBSIDIAN]: 'OBSIDIAN',
+  [BlockType.LAVA]: 'LAVA',
+  [BlockType.SNOW]: 'SNOW',
 };
 
 const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
@@ -206,7 +215,7 @@ controlsHelp.style.fontFamily = 'monospace';
 controlsHelp.style.fontSize = '12px';
 controlsHelp.style.textShadow = '1px 1px 2px black';
 controlsHelp.innerHTML =
-  'WASD: Move | Ctrl/Double-tap W: Sprint | Space: Jump | Q/E: Shift W-dimension | G: Toggle Ghosts<br>Left Click: Destroy | Right Click: Place | 1-8: Select Block';
+  'WASD: Move | Ctrl/Double-tap W: Sprint | Space: Jump | Q/E: Shift W-dimension | G: Toggle Ghosts<br>Left Click: Destroy | Right Click: Place | 1-0: Select Block';
 
 const clickToPlay = document.createElement('div');
 clickToPlay.style.position = 'absolute';
@@ -237,6 +246,74 @@ function flashTransition(): void {
   });
 }
 
+function getBiomeForW(w: number): WBiome {
+  const absW = Math.abs(w);
+
+  if (absW === 0) {
+    return 'normal';
+  }
+
+  if (absW === 1) {
+    return 'forest';
+  }
+
+  if (w === 2) {
+    return 'desert';
+  }
+
+  if (w === -2) {
+    return 'ice';
+  }
+
+  if (w === 3) {
+    return 'mushroom';
+  }
+
+  if (w === -3) {
+    return 'crystal';
+  }
+
+  return 'nether';
+}
+
+function chooseMobType(w: number): MobType {
+  const biome = getBiomeForW(w);
+  const roll = Math.random();
+
+  switch (biome) {
+    case 'forest':
+      if (roll < 0.5) {
+        return MobType.SLIME;
+      }
+      if (roll < 0.8) {
+        return MobType.FIREFLY;
+      }
+      return MobType.SPIDER;
+    case 'normal':
+      return roll < 0.7 ? MobType.SLIME : MobType.SPIDER;
+    case 'ice':
+    case 'crystal':
+      return roll < 0.6 ? MobType.GHOST : MobType.SPIDER;
+    case 'mushroom':
+      return roll < 0.8 ? MobType.SLIME : MobType.SPIDER;
+    case 'nether':
+      return roll < 0.7 ? MobType.SPIDER : MobType.GHOST;
+    case 'desert':
+      return roll < 0.5 ? MobType.SPIDER : MobType.SLIME;
+  }
+}
+
+function getMobSpawnYOffset(type: MobType): number {
+  switch (type) {
+    case MobType.GHOST:
+      return 1.5;
+    case MobType.FIREFLY:
+      return 1.2;
+    default:
+      return 0;
+  }
+}
+
 function getSelectedBlockShortcut(type: BlockType): string {
   if (type === BlockType.STONE) return '1';
   if (type === BlockType.DIRT) return '2';
@@ -246,6 +323,8 @@ function getSelectedBlockShortcut(type: BlockType): string {
   if (type === BlockType.LEAVES) return '6';
   if (type === BlockType.SAND) return '7';
   if (type === BlockType.PORTAL) return '8';
+  if (type === BlockType.ICE) return '9';
+  if (type === BlockType.SNOW) return '0';
   return '?';
 }
 
@@ -299,6 +378,10 @@ window.addEventListener('keydown', (event) => {
     selectedBlockType = BlockType.SAND;
   } else if (event.code === 'Digit8') {
     selectedBlockType = BlockType.PORTAL;
+  } else if (event.code === 'Digit9') {
+    selectedBlockType = BlockType.ICE;
+  } else if (event.code === 'Digit0') {
+    selectedBlockType = BlockType.SNOW;
   } else {
     return;
   }
@@ -611,7 +694,9 @@ function spawnMobs(): void {
 
   for (let y = 60; y >= 0; y--) {
     if (SOLID_BLOCKS.has(world.getBlock(Math.floor(spawnX), y, Math.floor(spawnZ)))) {
-      mobs.push(new Mob(spawnX, y + 1, spawnZ, player.w, scene));
+      const mobType = chooseMobType(player.w);
+      const spawnY = y + 1 + getMobSpawnYOffset(mobType);
+      mobs.push(new Mob(spawnX, spawnY, spawnZ, player.w, mobType, scene));
       return;
     }
   }

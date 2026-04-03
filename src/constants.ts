@@ -11,6 +11,13 @@ export enum BlockType {
   LEAVES = 6,
   SAND = 7,
   PORTAL = 8,
+  ICE = 9,
+  MUSHROOM_STEM = 10,
+  MUSHROOM_CAP = 11,
+  CRYSTAL = 12,
+  OBSIDIAN = 13,
+  LAVA = 14,
+  SNOW = 15,
 }
 
 export const BLOCK_COLORS: Record<BlockType, [number, number, number]> = {
@@ -23,6 +30,13 @@ export const BLOCK_COLORS: Record<BlockType, [number, number, number]> = {
   [BlockType.LEAVES]: [0.18, 0.55, 0.18],
   [BlockType.SAND]: [0.85, 0.8, 0.55],
   [BlockType.PORTAL]: [0.6, 0.2, 0.9],
+  [BlockType.ICE]: [0.7, 0.85, 1.0],
+  [BlockType.MUSHROOM_STEM]: [0.85, 0.8, 0.7],
+  [BlockType.MUSHROOM_CAP]: [0.8, 0.15, 0.15],
+  [BlockType.CRYSTAL]: [0.4, 0.9, 0.95],
+  [BlockType.OBSIDIAN]: [0.15, 0.1, 0.2],
+  [BlockType.LAVA]: [1.0, 0.4, 0.0],
+  [BlockType.SNOW]: [0.95, 0.95, 0.98],
 };
 
 export const GRASS_SIDE_COLOR: [number, number, number] = [0.545, 0.412, 0.078];
@@ -42,6 +56,8 @@ export const TRANSPARENT_BLOCKS: Set<BlockType> = new Set([
   BlockType.AIR,
   BlockType.WATER,
   BlockType.LEAVES,
+  BlockType.ICE,
+  BlockType.LAVA,
 ]);
 
 export const SOLID_BLOCKS: Set<BlockType> = new Set([
@@ -51,6 +67,12 @@ export const SOLID_BLOCKS: Set<BlockType> = new Set([
   BlockType.WOOD,
   BlockType.SAND,
   BlockType.PORTAL,
+  BlockType.ICE,
+  BlockType.MUSHROOM_STEM,
+  BlockType.MUSHROOM_CAP,
+  BlockType.CRYSTAL,
+  BlockType.OBSIDIAN,
+  BlockType.SNOW,
 ]);
 
 export const FACE_DIRECTIONS: [number, number, number][] = [
