@@ -470,7 +470,7 @@ function tryShiftW(): void {
 
   player.w = targetW;
   world.setW(targetW);
-  world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+  world.loadAroundPosition(player.position.x, player.position.y, player.position.z, true);
   world.loadGhosts(player.position.x, player.position.y, player.position.z);
   clearMobs();
   soundManager.playWShift();
@@ -507,7 +507,7 @@ function checkPortalTeleport(): void {
 
   player.w = targetW;
   world.setW(targetW);
-  world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+  world.loadAroundPosition(player.position.x, player.position.y, player.position.z, true);
   world.loadGhosts(player.position.x, player.position.y, player.position.z);
   clearMobs();
   soundManager.playWShift();
@@ -770,7 +770,7 @@ function resolveZ(deltaZ: number): void {
 camera.position.copy(player.getEyePosition());
 camera.lookAt(CHUNK_SIZE * 2, BASE_HEIGHT, CHUNK_SIZE * 2 + 50);
 
-world.loadAroundPosition(player.position.x, player.position.y, player.position.z);
+world.loadAroundPosition(player.position.x, player.position.y, player.position.z, true);
 world.loadGhosts(player.position.x, player.position.y, player.position.z);
 
 function animate(): void {

@@ -132,12 +132,12 @@ export class World {
     if (lz === CHUNK_SIZE - 1) this.remeshChunkIfExists(cx, cy, cz + 1);
   }
 
-  loadAroundPosition(playerX: number, playerY: number, playerZ: number): void {
+  loadAroundPosition(playerX: number, playerY: number, playerZ: number, unlimited = false): void {
     const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
     const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
     const centerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
     const requiredMeshes = new Set<string>();
-    const MAX_NEW_CHUNKS = 8;
+    const MAX_NEW_CHUNKS = unlimited ? Infinity : 8;
     let newChunksThisCall = 0;
 
     for (let cz = centerChunkZ - RENDER_DISTANCE; cz <= centerChunkZ + RENDER_DISTANCE; cz++) {
