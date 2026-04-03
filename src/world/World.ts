@@ -25,6 +25,7 @@ export class World {
   private ghostMaterialMinus: THREE.MeshLambertMaterial;
   private ghostMaterialPlus: THREE.MeshLambertMaterial;
   private ghostsEnabled: boolean;
+  private loadedMeshKeys: Set<string>;
 
   constructor(scene: THREE.Scene, seed: string) {
     this.chunks = new Map();
@@ -34,6 +35,7 @@ export class World {
     this.ghostMeshesWPlus = new Map();
     this.meshPool = [];
     this.waterMeshPool = [];
+    this.loadedMeshKeys = new Set();
     this.worldGen = new WorldGen(seed);
     this.scene = scene;
     this.currentW = 0;
@@ -41,6 +43,7 @@ export class World {
     this.chunkMaterial = new THREE.MeshLambertMaterial({
       map: this.atlasTexture,
       vertexColors: true,
+      side: THREE.DoubleSide,
     });
     this.waterMaterial = new THREE.MeshLambertMaterial({
       map: this.atlasTexture,
@@ -66,7 +69,7 @@ export class World {
       depthWrite: false,
       color: new THREE.Color(1.0, 0.6, 0.3),
     });
-    this.ghostsEnabled = true;
+    this.ghostsEnabled = false;
   }
 
   getAtlasTexture(): THREE.CanvasTexture {
@@ -134,6 +137,8 @@ export class World {
     const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
     const centerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
     const requiredMeshes = new Set<string>();
+    const MAX_NEW_CHUNKS = 8;
+    let newChunksThisCall = 0;
 
     for (let cz = centerChunkZ - RENDER_DISTANCE; cz <= centerChunkZ + RENDER_DISTANCE; cz++) {
       for (let cx = centerChunkX - RENDER_DISTANCE; cx <= centerChunkX + RENDER_DISTANCE; cx++) {
@@ -152,12 +157,18 @@ export class World {
           const meshKey = this.meshKey(cx, cy, cz);
           requiredMeshes.add(meshKey);
 
-          if (this.meshes.has(meshKey) || this.waterMeshes.has(meshKey)) {
+          if (this.loadedMeshKeys.has(meshKey)) {
+            continue;
+          }
+
+          if (newChunksThisCall >= MAX_NEW_CHUNKS) {
             continue;
           }
 
           const chunk = this.getOrCreateChunk(cx, cy, cz, this.currentW);
           const [mesh, waterMesh] = this.createChunkMeshes(chunk);
+          this.loadedMeshKeys.add(meshKey);
+          newChunksThisCall++;
 
           if (mesh) {
             this.meshes.set(meshKey, mesh);
@@ -180,6 +191,7 @@ export class World {
       this.scene.remove(mesh);
       this.releaseMesh(mesh);
       this.meshes.delete(key);
+      this.loadedMeshKeys.delete(key);
     }
 
     for (const [key, waterMesh] of this.waterMeshes.entries()) {
@@ -190,9 +202,8 @@ export class World {
       this.scene.remove(waterMesh);
       this.releaseWaterMesh(waterMesh);
       this.waterMeshes.delete(key);
+      this.loadedMeshKeys.delete(key);
     }
-
-    this.preloadWLayers(playerX, playerZ);
   }
 
   preloadWLayers(playerX: number, playerZ: number): void {
@@ -221,7 +232,7 @@ export class World {
 
     const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
     const centerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
-    const GHOST_DISTANCE = 2;
+    const GHOST_DISTANCE = 1;
 
     for (const [dw, ghostMeshMap, material] of [
       [-1, this.ghostMeshesWMinus, this.ghostMaterialMinus],
@@ -304,6 +315,7 @@ export class World {
 
     this.meshes.clear();
     this.waterMeshes.clear();
+    this.loadedMeshKeys.clear();
     this.clearGhostMeshes();
     this.currentW = newW;
   }

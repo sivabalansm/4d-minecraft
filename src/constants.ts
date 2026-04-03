@@ -35,7 +35,7 @@ export const W_NOISE_SCALE = 0.05;
 export const DIRT_DEPTH = 4;
 export const CAVE_NOISE_SCALE = 0.05;
 export const CAVE_THRESHOLD = 0.55;
-export const WATER_LEVEL = 26;
+export const WATER_LEVEL = 14;
 export const TREE_DENSITY = 0.02;
 
 export const TRANSPARENT_BLOCKS: Set<BlockType> = new Set([
